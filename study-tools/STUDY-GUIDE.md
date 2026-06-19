@@ -30,7 +30,23 @@ material more cleanly.
 
 ## 1. One-time setup
 
-You need **Python 3.10 or newer**. In a terminal:
+You need **Python 3.10 or newer**.
+
+**Easiest (recommended) — one command** creates the virtual environment and installs
+everything for you:
+
+```bash
+./study-tools/setup.sh
+```
+
+Then activate the environment it created (do this in each new terminal):
+
+```bash
+source .venv/bin/activate          # Windows (PowerShell): .venv\Scripts\Activate.ps1
+```
+
+<details>
+<summary>Prefer to do it manually?</summary>
 
 ```bash
 # Create an isolated environment so this doesn't touch the rest of your system
@@ -40,6 +56,7 @@ source .venv/bin/activate          # Windows (PowerShell): .venv\Scripts\Activat
 # Install MarkItDown with support for every file type
 pip install 'markitdown[all]'
 ```
+</details>
 
 > Want a smaller install? Install only what you need:
 > `pip install 'markitdown[pdf,pptx,docx,youtube-transcription]'`
