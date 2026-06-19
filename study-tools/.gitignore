@@ -1,0 +1,8 @@
+# Converted Markdown output — regenerate locally with convert.sh, don't commit.
+markdown/
+
+# Your personal source materials (PDFs, slides, docs) — keep these off GitHub.
+input/*
+
+# ...but keep the example URL list (and this .gitignore) tracked.
+!input/youtube-urls.txt
