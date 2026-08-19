@@ -1,8 +1,6 @@
-# Converted Markdown output — regenerate locally with convert.sh, don't commit.
+# Generated Markdown output — recreate it any time by re-running studyprep.
 markdown/
 
-# Your personal source materials (PDFs, slides, docs) — keep these off GitHub.
-input/*
-
-# ...but keep the example URL list (and this .gitignore) tracked.
-!input/youtube-urls.txt
+# Any personal study material accidentally placed inside the repo.
+# (Your real materials live in ~/Desktop/StudyMaterials, outside this repo.)
+input/

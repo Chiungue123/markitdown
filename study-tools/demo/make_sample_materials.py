@@ -7,8 +7,8 @@ can run the converter against realistic input without supplying your own files.
 USAGE:
     python study-tools/demo/make_sample_materials.py [OUTPUT_DIR]
 
-    OUTPUT_DIR defaults to study-tools/input/ — so the very next step is:
-        ./study-tools/convert.sh
+    OUTPUT_DIR defaults to ~/Desktop/StudyMaterials/Demo — so the next step is:
+        studyprep Demo
 
 DEPENDENCIES (demo only):
     pip install reportlab python-pptx
@@ -18,9 +18,10 @@ DEPENDENCIES (demo only):
 import os
 import sys
 
-# Default output dir: study-tools/input (this file lives in study-tools/demo).
+# Default output: a "Demo" subject inside the study hub, so `studyprep Demo` works.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_OUT = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "input"))
+HUB = os.environ.get("STUDYPREP_HUB", os.path.join(os.path.expanduser("~"), "Desktop", "StudyMaterials"))
+DEFAULT_OUT = os.path.join(HUB, "Demo")
 
 
 def make_pdf(out_dir: str) -> str:
@@ -116,7 +117,7 @@ def main():
         print("Generated sample materials in", out_dir + ":")
         for p in created:
             print("  -", os.path.basename(p))
-        print("\nNext: run ./study-tools/convert.sh to convert them to Markdown.")
+        print("\nNext: run  studyprep " + os.path.basename(out_dir))
     else:
         print("Nothing generated. Install demo dependencies:")
         print("  pip install reportlab python-pptx")

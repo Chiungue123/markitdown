@@ -1,189 +1,150 @@
 # Turn your school materials into Markdown for token-efficient Claude study sessions
 
-This guide shows how to use **MarkItDown** (the tool in this repo) to convert
-**PDFs, PowerPoint, Word documents, and YouTube videos** into Markdown, then use
-those Markdown files in Claude for focused, one-on-one studying on *only* that
-material.
+Convert a whole folder of school material — **PDFs, PowerPoints, Word docs, Excel
+sheets, YouTube videos, and article links** — into Markdown with **one command**,
+then drag the result into a Claude Project for focused, cheap study sessions.
 
-## The mental model (read this first)
-
-MarkItDown is a **tool that runs on your own computer**. It is **not** a connector
-that you drop a PDF into a Claude chat and it auto-converts. The flow is:
+## How it works
 
 ```
-   your files  ──►  MarkItDown (on your computer)  ──►  clean .md files  ──►  Claude
+~/Desktop/StudyMaterials/Pharmacology/     ← you drag your files in here
+        │
+        │   studyprep Pharmacology
+        ▼
+~/Desktop/StudyMaterials/Pharmacology/markdown/   ← drag this into a Claude Project
 ```
 
-You convert first, then bring the Markdown into Claude. The most efficient way to
-do that is a **Claude Project** (explained below), where you upload the material
-once and every chat in the project stays scoped to it.
+Your original files are **never modified or moved**. The Markdown lands in a new
+`markdown` subfolder inside the subject folder.
 
-### Why bother converting to Markdown?
+### Why convert at all?
 
-Markdown is plain, structured text. A raw PDF or PowerPoint carries a lot of
-layout/binary overhead and often extracts messily. Converting to Markdown strips
-that away, so Claude spends its context (tokens) on the actual *content* of your
-notes instead of formatting noise — cheaper sessions, and the model "sees" the
-material more cleanly.
+- **Avoids expensive vision tokens.** An image-heavy PDF uploaded directly can be
+  processed as page images, which costs far more than plain text.
+- **Strips layout noise** — headers, footers, page numbers, column artifacts.
+- **A Claude Project loads it once** and reuses it across every chat, instead of
+  re-uploading each session.
 
 ---
 
-## 1. One-time setup
+## One-time setup
 
-You need **Python 3.10 or newer**.
-
-**Easiest (recommended) — one command** creates the virtual environment and installs
-everything for you:
+You need **Python 3.10+** (macOS: `python3 --version` to check).
 
 ```bash
-./study-tools/setup.sh
+cd /path/to/markitdown
+./study-tools/install.sh
 ```
 
-Then activate the environment it created (do this in each new terminal):
+That single command:
+1. creates a Python environment and installs MarkItDown,
+2. makes `studyprep` runnable from **any** folder,
+3. creates `~/Desktop/StudyMaterials/`.
 
-```bash
-source .venv/bin/activate          # Windows (PowerShell): .venv\Scripts\Activate.ps1
-```
+Then **open a new Terminal window** so the `studyprep` command is picked up.
+
+---
+
+## Everyday use
+
+1. In Finder, open **`~/Desktop/StudyMaterials`**
+2. Make a folder for the subject, e.g. **`Pharmacology`**
+3. Drag in your PDFs, slides, and documents
+4. *(Optional)* create a **`urls.txt`** in that folder with YouTube or article
+   links, one per line:
+   ```
+   # lines starting with # are ignored
+   https://www.youtube.com/watch?v=VIDEO_ID
+   https://en.wikipedia.org/wiki/Photosynthesis
+   ```
+5. In Terminal — from anywhere:
+   ```bash
+   studyprep Pharmacology
+   ```
+6. Drag the new **`markdown`** folder into a Claude Project.
+
+Running `studyprep` with no arguments lists your available subjects.
+You can also pass a full path to any folder: `studyprep ~/Downloads/lecture-stuff`.
+
+### No terminal? Double-click instead
+
+Double-click **`study-tools/StudyPrep.command`** in Finder. It opens a window,
+lists your subjects, and you pick one by number.
+
+> First time only: if macOS refuses to open it, right-click the file → **Open** →
+> **Open**, or run `chmod +x study-tools/StudyPrep.command` once.
 
 <details>
-<summary>Prefer to do it manually?</summary>
+<summary>Optional: right-click any folder → “Convert to Markdown”</summary>
 
-```bash
-# Create an isolated environment so this doesn't touch the rest of your system
-python -m venv .venv
-source .venv/bin/activate          # Windows (PowerShell): .venv\Scripts\Activate.ps1
+1. Open **Automator** → **New** → **Quick Action**
+2. Set *“Workflow receives current”* to **folders** in **Finder**
+3. Add the **Run Shell Script** action, set *Pass input* to **as arguments**
+4. Paste:
+   ```bash
+   for f in "$@"; do
+     /full/path/to/markitdown/study-tools/studyprep "$f"
+   done
+   ```
+5. Save it as **Convert to Markdown**
 
-# Install MarkItDown with support for every file type
-pip install 'markitdown[all]'
-```
+Now right-click any folder in Finder → Quick Actions → **Convert to Markdown**.
 </details>
 
-> Want a smaller install? Install only what you need:
-> `pip install 'markitdown[pdf,pptx,docx,youtube-transcription]'`
+---
 
-Verify it works:
+## What you get back
 
-```bash
-markitdown --version
-```
+Every run writes a **`conversion-report.md`** into the `markdown` folder listing
+what converted, what needs attention, and what failed **with the reason**. Nothing
+fails silently. Examples:
+
+- a YouTube video with **no captions** → flagged, because there is no transcript to extract
+- a **scanned PDF** with no text layer → flagged as "likely a scan or images"
+- a damaged or misnamed file → flagged with the actual error
 
 ---
 
-## 2. Convert a single file
+## Important: images, diagrams, and tables
 
-The basic command is `markitdown <input> -o <output.md>`:
+| What's in your file | Converted to Markdown? |
+| --- | --- |
+| **Real text tables** (selectable text) | ✅ Yes — becomes a proper Markdown table |
+| **Diagrams / figures / photos** | ❌ No — images are skipped |
+| **Scanned pages, or tables that are pictures** | ❌ No — there's no text to extract (you'll be warned) |
 
-```bash
-# PDF
-markitdown lecture-notes.pdf -o lecture-notes.md
-
-# PowerPoint slides
-markitdown chapter3-slides.pptx -o chapter3-slides.md
-
-# Word document
-markitdown essay-prompt.docx -o essay-prompt.md
-
-# YouTube video (pulls the title, description, metadata, and transcript)
-markitdown "https://www.youtube.com/watch?v=VIDEO_ID" -o lecture-video.md
-```
-
-> **YouTube note:** MarkItDown extracts the video's **transcript**, so the video
-> must have captions (manual or auto-generated). No captions → no transcript.
+**What to do about diagrams:** don't try to convert them. **Screenshot the figure
+and attach the image to your Claude Project** alongside the Markdown files —
+Claude reads images natively. That's free, immediate, and works better than OCR
+for most study material.
 
 ---
 
-## 3. Convert a whole folder at once (recommended)
+## Studying in Claude
 
-Converting files one by one is tedious. Use the included **`convert.sh`** script to
-process an entire folder — plus a list of YouTube URLs — in one command.
+Create a **Project** (claude.ai → Projects → Create Project), upload the contents
+of the `markdown` folder into the project knowledge, and start chats inside it.
+Every conversation is grounded on that material only, loaded once. Try:
 
-```bash
-# 1) Put your source files in an "input" folder
-mkdir -p study-tools/input
-#    ...copy your .pdf / .pptx / .docx / .xlsx files into study-tools/input...
-
-# 2) (Optional) list YouTube lectures, one URL per line:
-#    study-tools/input/youtube-urls.txt
-#    (blank lines and lines starting with # are ignored)
-
-# 3) Run the converter
-cd study-tools
-./convert.sh                       # defaults: input -> ./input, output -> ./markdown
-# or specify folders explicitly:
-./convert.sh ~/Desktop/biology-class ~/Desktop/biology-md
-```
-
-You'll get one `.md` file per input, plus a summary like
-`Done: 7 converted, 0 failed.` The Markdown files land in the output folder
-(default `study-tools/markdown`), ready to hand to Claude.
-
-> First run? If you see an error that `markitdown` isn't found, you missed the
-> install step — the script prints the exact `pip install` command to fix it.
+- *"Quiz me on chapter 3 using only my notes."*
+- *"Make flashcards from the lecture slides."*
+- *"Explain the Krebs cycle the way my professor did, then test me."*
 
 ---
 
-## 4. Use the Markdown in Claude — the token-efficient way
+## Optional: convert on-the-fly inside Claude Desktop (MCP connector)
 
-### Recommended: a Claude **Project** (load once, study many times)
+This repo also ships an MCP server so Claude Desktop can convert a file or URL
+during a chat. Good for quick one-offs; the Project workflow above is still better
+for a reusable study library.
 
-This is the most efficient pattern for "study only this material" sessions:
-
-1. Go to **claude.ai → Projects → Create Project** (e.g. "Biology — Midterm").
-2. Open the project's **knowledge / files** area and **upload your `.md` files**
-   (the ones from `study-tools/markdown`).
-3. Now start chats *inside that project*. Every conversation is grounded on that
-   material, and you only paid the token cost of loading it **once** — not on every
-   message. Ask things like *"Quiz me on chapter 3,"* *"Explain mitosis using only
-   my lecture notes,"* or *"Make flashcards from the slides."*
-
-Because the material lives in the project, you can have many separate study
-sessions without re-uploading, and Claude stays focused on *your* content.
-
-### Quick alternative: a one-off chat
-
-For a single document, just attach or paste the `.md` file into a normal chat. Good
-for a quick question; less efficient if you'll study the same material repeatedly.
-
----
-
-## 5. Optional: convert on-the-fly *inside* Claude Desktop (MCP connector)
-
-If you use the **Claude Desktop** app, this repo also ships an MCP server
-(`markitdown-mcp`) that lets Claude convert a file or URL to Markdown *during* a
-chat — handy for quick, ad-hoc conversions without dropping to a terminal. It
-exposes a single tool, `convert_to_markdown(uri)`, accepting `file:`, `http:`,
-`https:`, and `data:` URIs.
-
-> For building a **reusable study library**, the Project workflow in section 4 is
-> still the better choice. Use the MCP connector for one-off "convert this real
-> quick" moments.
-
-### Setup (Docker is the recommended way)
-
-1. Build the image from the MCP package folder in this repo:
+1. Build the image:
    ```bash
    cd packages/markitdown-mcp
    docker build -t markitdown-mcp:latest .
    ```
-
-2. Open Claude Desktop's config file
-   (Claude Desktop → Settings → Developer → Edit Config, which opens
-   `claude_desktop_config.json`) and add:
-
-   ```json
-   {
-     "mcpServers": {
-       "markitdown": {
-         "command": "docker",
-         "args": ["run", "--rm", "-i", "markitdown-mcp:latest"]
-       }
-     }
-   }
-   ```
-
-3. To let it read **local files**, mount the folder that holds your materials into
-   the container. Everything under that folder then appears under `/workdir`:
-
+2. Claude Desktop → Settings → Developer → Edit Config, and add (mounting your
+   study folder so Claude can reach local files):
    ```json
    {
      "mcpServers": {
@@ -191,23 +152,19 @@ exposes a single tool, `convert_to_markdown(uri)`, accepting `file:`, `http:`,
          "command": "docker",
          "args": [
            "run", "--rm", "-i",
-           "-v", "/Users/you/study-materials:/workdir",
+           "-v", "/Users/YOUR_NAME/Desktop/StudyMaterials:/workdir",
            "markitdown-mcp:latest"
          ]
        }
      }
    }
    ```
+3. Restart Claude Desktop. Ask it to convert `file:///workdir/Biology/notes.pdf`
+   or any URL. It exposes one tool, `convert_to_markdown(uri)`.
 
-   Then in Claude you can ask it to convert e.g. `file:///workdir/lecture.pdf` or a
-   YouTube URL, and it returns Markdown inline.
-
-4. Restart Claude Desktop. (Prefer not to use Docker? `pip install markitdown-mcp`
-   and use `"command": "markitdown-mcp"` with no args instead.)
-
-> **Security note:** the MCP server runs with your user's permissions and can read
-> any file that user can access. It binds to `localhost` only. Don't expose it to
-> the network. See `packages/markitdown-mcp/README.md` for full details.
+> Not using Docker? `pip install markitdown-mcp` and use `"command": "markitdown-mcp"`.
+> Security: the server runs with your user's permissions and binds to localhost only.
+> See `packages/markitdown-mcp/README.md`.
 
 ---
 
@@ -215,13 +172,12 @@ exposes a single tool, `convert_to_markdown(uri)`, accepting `file:`, `http:`,
 
 | Task | Command |
 | --- | --- |
-| Install everything | `pip install 'markitdown[all]'` |
-| Convert one PDF | `markitdown notes.pdf -o notes.md` |
-| Convert PowerPoint | `markitdown slides.pptx -o slides.md` |
-| Convert Word doc | `markitdown paper.docx -o paper.md` |
-| Convert YouTube | `markitdown "https://youtu.be/ID" -o video.md` |
-| Convert a whole folder | `./study-tools/convert.sh INPUT_DIR OUTPUT_DIR` |
-| Best way to study in Claude | Upload the `.md` files into a **Claude Project** |
+| One-time setup | `./study-tools/install.sh` |
+| Convert a subject | `studyprep Pharmacology` |
+| List your subjects | `studyprep` |
+| Convert any folder | `studyprep ~/Downloads/stuff` |
+| No terminal | double-click `study-tools/StudyPrep.command` |
+| Try it with samples | see `study-tools/demo/README.md` |
 
-Supported input formats also include Excel, HTML, images, audio, EPUB, CSV, JSON,
-and ZIP archives — see the main `README.md` for the full list.
+Supported inputs include PDF, PPTX, DOCX, XLSX/XLS, HTML, CSV, JSON, XML, EPUB,
+Jupyter notebooks, Outlook `.msg`, plus YouTube and article URLs.

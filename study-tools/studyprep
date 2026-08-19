@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+#
+# studyprep — Convert a folder of school materials into Markdown for Claude.
+#
+# Converts every supported file in a folder (PDF, PowerPoint, Word, Excel, HTML,
+# and more) plus any YouTube or article URLs listed in urls.txt, and writes the
+# results into a "markdown" subfolder you can drag straight into a Claude Project.
+# Your original files are never modified or moved.
+#
+# USAGE:
+#   studyprep <subject>        # a subfolder of ~/Desktop/StudyMaterials
+#   studyprep <full/path>      # or any folder path
+#   studyprep                  # lists available subjects
+#
+# EXAMPLE:
+#   studyprep Pharmacology
+#     -> reads  ~/Desktop/StudyMaterials/Pharmacology/
+#     -> writes ~/Desktop/StudyMaterials/Pharmacology/markdown/
+#
+# Nothing fails silently: every file that cannot be converted is reported with the
+# reason, and a conversion-report.md is written next to the output.
+#
+# Written for bash 3.2 (the version macOS ships) — avoid bash 4+ syntax here.
+
+set -uo pipefail   # NOT -e: we want to keep going after a file fails.
+
+# ---------------------------------------------------------------- configuration
+HUB="${STUDYPREP_HUB:-$HOME/Desktop/StudyMaterials}"
+OUTPUT_SUBDIR="markdown"
+URLS_FILE="urls.txt"
+# Below this many non-whitespace characters, a PDF probably had no text layer.
+MIN_CHARS_WARN=200
+
+# File types we hand to markitdown (lowercase; matched case-insensitively).
+EXTENSIONS="pdf pptx ppt docx doc xlsx xls html htm csv json xml epub ipynb msg rtf odt txt"
+
+# ---------------------------------------------------------------- pretty output
+if [ -t 1 ]; then
+  BOLD=$'\033[1m'; RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+else
+  BOLD=""; RED=""; GREEN=""; YELLOW=""; RESET=""
+fi
+
+info()  { printf '%s\n' "$*"; }
+ok()    { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
+warn()  { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$*"; }
+fail()  { printf '  %s✗%s %s\n' "$RED" "$RESET" "$*"; }
+
+# ------------------------------------------------- locate repo + activate venv
+# Resolve this script's real location even when invoked through a symlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  SDIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$SDIR/$SOURCE" ;; esac
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/.." && pwd)"
+
+# Use the project's virtual environment automatically, if setup.sh made one.
+if [ -f "$REPO_ROOT/.venv/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  . "$REPO_ROOT/.venv/bin/activate"
+fi
+
+if ! command -v markitdown >/dev/null 2>&1; then
+  printf '%sERROR:%s the `markitdown` command was not found.\n\n' "$RED" "$RESET" >&2
+  printf 'Run the one-time setup first:\n\n    %s/study-tools/setup.sh\n\n' "$REPO_ROOT" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------- resolve input
+usage_and_list() {
+  printf '%sUsage:%s studyprep <subject-folder-name>\n\n' "$BOLD" "$RESET"
+  if [ -d "$HUB" ]; then
+    printf 'Available subjects in %s:\n' "$HUB"
+    found=0
+    for d in "$HUB"/*/; do
+      [ -d "$d" ] || continue
+      name="$(basename "$d")"
+      [ "$name" = "$OUTPUT_SUBDIR" ] && continue
+      printf '  • %s\n' "$name"
+      found=1
+    done
+    [ "$found" -eq 0 ] && printf '  (none yet — create a folder in there and add your files)\n'
+  else
+    printf 'Your study hub does not exist yet:\n  %s\n' "$HUB"
+    printf 'Create it, then add one folder per subject.\n'
+  fi
+}
+
+if [ $# -lt 1 ]; then
+  usage_and_list
+  exit 1
+fi
+
+TARGET="$1"
+if [ -d "$TARGET" ]; then
+  INPUT_DIR="$(cd -P "$TARGET" && pwd)"          # a real path was given
+elif [ -d "$HUB/$TARGET" ]; then
+  INPUT_DIR="$(cd -P "$HUB/$TARGET" && pwd)"     # a subject name was given
+else
+  printf '%sERROR:%s no folder named "%s".\n\n' "$RED" "$RESET" "$TARGET" >&2
+  usage_and_list >&2
+  exit 1
+fi
+
+OUTPUT_DIR="$INPUT_DIR/$OUTPUT_SUBDIR"
+mkdir -p "$OUTPUT_DIR" || { echo "ERROR: cannot create $OUTPUT_DIR" >&2; exit 1; }
+
+info ""
+info "${BOLD}Converting:${RESET} $INPUT_DIR"
+info "${BOLD}Output to:${RESET}  $OUTPUT_DIR"
+info ""
+
+# ---------------------------------------------------------------- bookkeeping
+n_ok=0; n_fail=0; n_warn=0
+REPORT_OK=""; REPORT_FAIL=""; REPORT_WARN=""
+ERR_TMP="$(mktemp "${TMPDIR:-/tmp}/studyprep.XXXXXX")"
+trap 'rm -f "$ERR_TMP"' EXIT
+
+# Pull the most useful line out of a Python traceback / error dump.
+short_error() {
+  # Prefer a MissingDependency / explicit error line; else the last non-empty line.
+  reason="$(grep -Ei 'MissingDependency|No module named|Error:|Exception|not found|Unsupported' "$ERR_TMP" 2>/dev/null | tail -n 1)"
+  if [ -z "$reason" ]; then
+    reason="$(grep -v '^[[:space:]]*$' "$ERR_TMP" 2>/dev/null | tail -n 1)"
+  fi
+  [ -z "$reason" ] && reason="unknown error"
+  # Trim to something readable on one line.
+  printf '%s' "$reason" | cut -c1-200
+}
+
+# Convert one source (file path or URL) into $2. Reports success/failure loudly.
+convert_one() {
+  src="$1"; dst="$2"; label="$3"; kind="$4"   # kind: file | url
+
+  if markitdown "$src" -o "$dst" 2>"$ERR_TMP"; then
+    chars=$(tr -d '[:space:]' < "$dst" 2>/dev/null | wc -c | tr -d ' ')
+    if [ "${chars:-0}" -lt "$MIN_CHARS_WARN" ]; then
+      # It converted, but produced almost nothing. Explain the likely cause for
+      # this specific kind of source rather than guessing "scanned" for everything.
+      case "$kind" in
+        url)
+          reason_short="video likely has no captions/transcript"
+          reason_long="If this is a YouTube link, the video likely has **no captions or transcript** available, so there was nothing to extract. Try a different video, or check the link opens correctly." ;;
+        pdf)
+          reason_short="likely a scan or images with no text layer"
+          reason_long="This is usually a **scanned PDF or images with no text layer**, so there is no text to extract. Screenshot the pages you need and attach those images to your Claude Project instead — Claude can read images directly." ;;
+        *)
+          reason_short="file produced almost no text (may be empty or damaged)"
+          reason_long="The file converted but produced almost no text. It may be **empty, damaged, or not really the format its extension claims**. Try opening it normally to confirm it is intact." ;;
+      esac
+      warn "$label — $reason_short"
+      REPORT_WARN="$REPORT_WARN
+- **$label** — only $chars characters of text. $reason_long"
+      n_warn=$((n_warn + 1))
+    else
+      ok "$label"
+      REPORT_OK="$REPORT_OK
+- $label → \`$(basename "$dst")\`"
+      n_ok=$((n_ok + 1))
+    fi
+    return 0
+  fi
+
+  reason="$(short_error)"
+  fail "$label"
+  printf '      reason: %s\n' "$reason"
+  REPORT_FAIL="$REPORT_FAIL
+- **$label** — $reason"
+  n_fail=$((n_fail + 1))
+  rm -f "$dst"   # don't leave a half-written file behind
+  return 1
+}
+
+# ---------------------------------------------------------------- 1) local files
+info "${BOLD}Files${RESET}"
+shopt -s nullglob nocaseglob
+any_file=0
+for ext in $EXTENSIONS; do
+  for src in "$INPUT_DIR"/*."$ext"; do
+    [ -f "$src" ] || continue
+    base="$(basename "$src")"
+    # urls.txt is our control file, not study material — never convert it.
+    lower_base="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
+    [ "$lower_base" = "$URLS_FILE" ] && continue
+    name="${base%.*}"
+    # Tell convert_one what kind of source this is so warnings are accurate.
+    if [ "$ext" = "pdf" ]; then kind="pdf"; else kind="file"; fi
+    convert_one "$src" "$OUTPUT_DIR/$name.md" "$base" "$kind"
+    any_file=1
+  done
+done
+shopt -u nullglob nocaseglob
+[ "$any_file" -eq 0 ] && info "  (no convertible files found directly in this folder)"
+
+# ---------------------------------------------------------------- 2) URLs
+urls_path="$INPUT_DIR/$URLS_FILE"
+if [ -f "$urls_path" ]; then
+  info ""
+  info "${BOLD}Links${RESET} (from $URLS_FILE)"
+  any_url=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    url="$(printf '%s' "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -z "$url" ] && continue
+    case "$url" in \#*) continue ;; esac
+    case "$url" in http://*|https://*) ;; *)
+        fail "$url"
+        printf '      reason: not a valid http(s) URL\n'
+        REPORT_FAIL="$REPORT_FAIL
+- **$url** — not a valid http(s) URL"
+        n_fail=$((n_fail + 1)); any_url=1; continue ;;
+    esac
+
+    # Build a readable, filesystem-safe output name.
+    vid="$(printf '%s' "$url" | sed -n 's/.*[?&]v=\([A-Za-z0-9_-]\{6,\}\).*/\1/p')"
+    if [ -z "$vid" ]; then
+      vid="$(printf '%s' "$url" | sed -n 's#.*youtu\.be/\([A-Za-z0-9_-]\{6,\}\).*#\1#p')"
+    fi
+    if [ -n "$vid" ]; then
+      slug="youtube-$vid"
+    else
+      slug="$(printf '%s' "$url" | sed 's#^https\?://##; s#^www\.##; s#/$##; s#[^A-Za-z0-9._-]#-#g' | cut -c1-60)"
+    fi
+
+    convert_one "$url" "$OUTPUT_DIR/$slug.md" "$url" "url"
+    any_url=1
+  done < "$urls_path"
+  [ "$any_url" -eq 0 ] && info "  (urls.txt has no links yet)"
+fi
+
+# ---------------------------------------------------------------- 3) report
+REPORT="$OUTPUT_DIR/conversion-report.md"
+{
+  echo "# Conversion report"
+  echo
+  echo "Source folder: \`$INPUT_DIR\`"
+  echo
+  echo "**$n_ok converted · $n_warn need attention · $n_fail failed**"
+  if [ -n "$REPORT_OK" ]; then
+    echo; echo "## Converted"; echo "$REPORT_OK"
+  fi
+  if [ -n "$REPORT_WARN" ]; then
+    echo; echo "## ⚠️ Converted, but check these"; echo "$REPORT_WARN"
+  fi
+  if [ -n "$REPORT_FAIL" ]; then
+    echo; echo "## ❌ Failed"; echo "$REPORT_FAIL"
+    echo
+    echo "Common fixes: install all converters with \`pip install 'markitdown[all]'\`,"
+    echo "or check that the file is not password-protected or corrupted."
+  fi
+  echo
+  echo "---"
+  echo "Diagrams and images are **not** converted to text. To study from a figure,"
+  echo "screenshot it and attach the image to your Claude Project alongside these files."
+} > "$REPORT"
+
+info ""
+info "------------------------------------------------------------"
+printf '%sDone:%s %s%d converted%s' "$BOLD" "$RESET" "$GREEN" "$n_ok" "$RESET"
+[ "$n_warn" -gt 0 ] && printf ' · %s%d need attention%s' "$YELLOW" "$n_warn" "$RESET"
+[ "$n_fail" -gt 0 ] && printf ' · %s%d failed%s' "$RED" "$n_fail" "$RESET"
+printf '\n'
+info "Markdown is in: $OUTPUT_DIR"
+info "Report:         $REPORT"
+if [ "$n_warn" -gt 0 ] || [ "$n_fail" -gt 0 ]; then
+  info ""
+  info "Open the report above for details on anything that needs attention."
+fi
+info ""
+info "Next: drag the '$OUTPUT_SUBDIR' folder into a Claude Project."
+info ""
+
+[ "$n_fail" -gt 0 ] && exit 1
+exit 0
